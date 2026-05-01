@@ -20,7 +20,7 @@ def handle_agent(conn, addr):
             data = conn.recv(4096)
             if not data:
                 break
-            log(f"{addr[0]} → {data.decode('utf-8', errors='ignore')}")
+            log(f"{addr[0]}:\t{data.decode('utf-8', errors='ignore')}")
     except Exception as e:
         log(f"Agent {addr[0]} error: {e}")
     finally:
