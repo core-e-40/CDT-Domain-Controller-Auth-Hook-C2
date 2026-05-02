@@ -36,7 +36,6 @@ def main():
 
     while True:
         conn, addr = srv.accept()
-        # each agent gets its own thread
         t = threading.Thread(target=handle_agent, args=(conn, addr))
         t.daemon = True
         t.start()

