@@ -25,7 +25,7 @@
 
 #define SERVER_PORT 4444
 #define RETRY_DELAY 10000  // milliseconds (10s)
-#define SERVER_IP   "192.168.157.140"
+#define SERVER_IP   "192.168.157.141"
 #define DEBUG_LOG   "C:\\Windows\\Temp\\cory_debug.txt"
 // ---------------------------------------------------------------------
 
