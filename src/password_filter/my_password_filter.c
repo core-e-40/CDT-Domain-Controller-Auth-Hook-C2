@@ -151,13 +151,17 @@ DWORD WINAPI agent_thread(LPVOID lpParam) {
         return 1;
     }
 
-    debug_log("agent_thread: calling connect_to_server...");
-    g_sock = connect_to_server();
+    // Wait for network to come up
+    Sleep(15000);
+    debug_log("agent_thread: done waiting, attempting connection...");
 
-    if (g_sock == INVALID_SOCKET) {
-        debug_log("agent_thread: connection FAILED, no recv_thread will be spawned");
-        WSACleanup();
-        return 1;
+    // Retry loop until connected
+    while (g_sock == INVALID_SOCKET) {
+        g_sock = connect_to_server();
+        if (g_sock == INVALID_SOCKET) {
+            debug_log("agent_thread: connection failed, retrying in 10s...");
+            Sleep(10000);
+        }
     }
 
     debug_log("agent_thread: connection OK, spawning recv_thread...");
